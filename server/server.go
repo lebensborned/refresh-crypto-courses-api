@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 	store "xtest/storage"
@@ -19,6 +20,8 @@ type Server struct {
 	Config *Config
 	Srv    http.Server
 	Wg     sync.WaitGroup
+	Ch     chan os.Signal
+	Ticker *time.Ticker
 }
 
 func NewServer(config *Config) *Server {
@@ -41,6 +44,7 @@ func (s *Server) Start() error {
 	s.configureRouter()
 	s.Srv.Handler = s.Router
 	s.Srv.Addr = s.Config.Server.Port
+	s.Ticker = time.NewTicker(30 * time.Second)
 	go s.serve()
 	go s.update()
 	return nil
@@ -59,30 +63,36 @@ func (s *Server) serve() {
 func (s *Server) update() {
 	defer s.Wg.Done()
 	for {
-		<-time.After(30 * time.Second)
-		resp, err := http.Get("https://api.blockchain.com/v3/exchange/tickers")
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		mod := []model.Model{}
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		resp.Body.Close()
-		err = json.Unmarshal(body, &mod)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		for _, v := range mod {
-			err := v.Save(s.Store)
+		select {
+		case <-s.Ticker.C:
+			resp, err := http.Get("https://api.blockchain.com/v3/exchange/tickers")
 			if err != nil {
 				log.Println(err)
+				continue
 			}
+			mod := []model.Model{}
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			resp.Body.Close()
+			err = json.Unmarshal(body, &mod)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			for _, v := range mod {
+				err := v.Save(s.Store)
+				if err != nil {
+					log.Println(err)
+				}
+			}
+			log.Println("Courses updated")
+		case <-s.Ch:
+			s.Ticker.Stop()
+			return
+
 		}
-		log.Println("Courses updated")
 	}
 }

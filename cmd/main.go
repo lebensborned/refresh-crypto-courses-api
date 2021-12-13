@@ -21,19 +21,25 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	defer func() {
 		if e := recover(); e != nil {
 			log.Fatalf("Recovered with panic: %v\nStack trace:\n%s\n", e, debug.Stack())
 		}
 	}()
+
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
 	s := server.NewServer(cfg)
-	s.Wg.Add(1)
+	s.Ch = ch
+	s.Wg.Add(2)
+
 	err = s.Start()
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	<-ch
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer func() {
