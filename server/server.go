@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 	store "xtest/storage"
 	"xtest/storage/model"
@@ -17,6 +18,7 @@ type Server struct {
 	Store  *store.Store
 	Config *Config
 	Srv    http.Server
+	Wg     sync.WaitGroup
 }
 
 func NewServer(config *Config) *Server {
@@ -49,11 +51,13 @@ func (s *Server) configureRouter() {
 	s.Router.HandleFunc("/courses", s.VerifyCourses).Methods(http.MethodPost)
 }
 func (s *Server) serve() {
+	defer s.Wg.Done()
 	if err := s.Srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Print("Listen error", err)
 	}
 }
 func (s *Server) update() {
+	defer s.Wg.Done()
 	for {
 		<-time.After(30 * time.Second)
 		resp, err := http.Get("https://api.blockchain.com/v3/exchange/tickers")

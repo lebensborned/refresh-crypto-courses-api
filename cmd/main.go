@@ -29,6 +29,7 @@ func main() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	s := server.NewServer(cfg)
+	s.Wg.Add(1)
 	err = s.Start()
 	if err != nil {
 		log.Fatal(err)
@@ -42,6 +43,7 @@ func main() {
 	if err := s.Srv.Shutdown(ctx); err != nil {
 		log.Fatalf("Server Shutdown Failed: %+v", err)
 	}
+	s.Wg.Wait()
 	s.Store.Disconnect()
 	log.Println("Server stopped")
 }
