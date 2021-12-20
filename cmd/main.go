@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	log.Println("Server started")
+	log.Println("Daemon started")
 	cfgPath, err := server.ParseFlags()
 	if err != nil {
 		log.Fatal(err)
@@ -22,34 +22,38 @@ func main() {
 		log.Fatal(err)
 	}
 
-	defer func() {
-		if e := recover(); e != nil {
-			log.Fatalf("Recovered with panic: %v\nStack trace:\n%s\n", e, debug.Stack())
+	func() {
+		defer func() {
+			if e := recover(); e != nil {
+				log.Fatalf("Recovered with panic: %v\nStack trace:\n%s\n", e, debug.Stack())
+			}
+		}()
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+		s := server.NewServer(cfg)
+		if err := s.Start(); err != nil {
+			log.Fatal(err)
 		}
+
+	mainLoop:
+		for {
+			select {
+			case sig := <-ch:
+				log.Printf("OS Signal received: %v", sig)
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer func() {
+					cancel()
+				}()
+				if err := s.Srv.Shutdown(ctx); err != nil {
+					log.Fatalf("Server Shutdown Failed: %+v", err)
+				}
+				break mainLoop
+			}
+		}
+		s.Close()
+		log.Println("Server shutdown")
 	}()
 
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
-
-	s := server.NewServer(cfg)
-	s.Ch = ch
-	s.Wg.Add(2)
-
-	err = s.Start()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	<-ch
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer func() {
-		cancel()
-	}()
-
-	if err := s.Srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server Shutdown Failed: %+v", err)
-	}
-	s.Wg.Wait()
-	s.Store.Disconnect()
-	log.Println("Server stopped")
+	log.Println("Daemon stopped")
 }

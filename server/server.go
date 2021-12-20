@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 	store "xtest/storage"
@@ -19,9 +18,9 @@ type Server struct {
 	Store  *store.Store
 	Config *Config
 	Srv    http.Server
-	Wg     sync.WaitGroup
-	Ch     chan os.Signal
-	Ticker *time.Ticker
+	wg     sync.WaitGroup
+	ch     chan struct{}
+	ticker *time.Ticker
 }
 
 func NewServer(config *Config) *Server {
@@ -33,6 +32,8 @@ func NewServer(config *Config) *Server {
 	return server
 }
 func (s *Server) Start() error {
+	ch := make(chan struct{})
+	s.ch = ch
 	store, err := store.New(s.Config.Store.DBUrl, s.Config.Store.DBName)
 	if err != nil {
 		return err
@@ -44,9 +45,11 @@ func (s *Server) Start() error {
 	s.configureRouter()
 	s.Srv.Handler = s.Router
 	s.Srv.Addr = s.Config.Server.Port
-	s.Ticker = time.NewTicker(30 * time.Second)
+	s.ticker = time.NewTicker(30 * time.Second)
+	s.wg.Add(2)
 	go s.serve()
 	go s.update()
+	log.Println("Server started")
 	return nil
 }
 
@@ -54,17 +57,26 @@ func (s *Server) configureRouter() {
 	http.Handle("/", s.Router)
 	s.Router.HandleFunc("/courses", s.VerifyCourses).Methods(http.MethodPost)
 }
+func (s *Server) Close() error {
+	s.ch <- struct{}{}
+	s.wg.Wait()
+	if err := s.Store.Disconnect(); err != nil {
+		return err
+	}
+	return nil
+}
 func (s *Server) serve() {
-	defer s.Wg.Done()
+	defer s.wg.Done()
 	if err := s.Srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Print("Listen error", err)
 	}
 }
 func (s *Server) update() {
-	defer s.Wg.Done()
+	defer s.wg.Done()
+UPDLOOP:
 	for {
 		select {
-		case <-s.Ticker.C:
+		case <-s.ticker.C:
 			resp, err := http.Get("https://api.blockchain.com/v3/exchange/tickers")
 			if err != nil {
 				log.Println(err)
@@ -89,10 +101,9 @@ func (s *Server) update() {
 				}
 			}
 			log.Println("Courses updated")
-		case <-s.Ch:
-			s.Ticker.Stop()
-			return
-
+		case <-s.ch:
+			s.ticker.Stop()
+			break UPDLOOP
 		}
 	}
 }
